@@ -9062,10 +9062,10 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `handle deep link records oversized message rejection`() async throws {
         let appModel = NodeAppModel()
-        let msg = String(repeating: "a", count: 20001)
+        let msg = String(repeating: "a", count: 241)
         let url = try #require(URL(string: "openclaw://agent?message=\(msg)"))
         await appModel.handleDeepLink(url: url)
-        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("message too large") == true)
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("over 240 chars") == true)
     }
 
     @Test @MainActor func `handle deep link requires confirmation when connected`() async {

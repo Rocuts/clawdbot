@@ -37,7 +37,6 @@ private struct ApprovalInboxDiscovery: Decodable {
 }
 
 private enum IOSDeepLinkAgentPolicy {
-    static let maxMessageChars = 20000
     static let maxConfirmChars = 240
 }
 
@@ -9177,8 +9176,11 @@ extension NodeAppModel {
         guard !message.isEmpty else { return }
         self.deepLinkLogger.info("agent deep link messageChars=\(message.count, privacy: .public)")
 
-        if message.count > IOSDeepLinkAgentPolicy.maxMessageChars {
-            self.recordShareEvent("Rejected: message too large (\(message.count) chars).")
+        if message.count > IOSDeepLinkAgentPolicy.maxConfirmChars {
+            self.recordShareEvent(
+                "Rejected: deep link over \(IOSDeepLinkAgentPolicy.maxConfirmChars) chars.")
+            self.deepLinkLogger.error(
+                "agent deep link rejected: message too long chars=\(message.count, privacy: .public)")
             return
         }
 
@@ -9188,13 +9190,6 @@ extension NodeAppModel {
             return
         }
 
-        if message.count > IOSDeepLinkAgentPolicy.maxConfirmChars {
-            self.recordShareEvent(
-                "Rejected: deep link over \(IOSDeepLinkAgentPolicy.maxConfirmChars) chars.")
-            self.deepLinkLogger.error(
-                "agent deep link rejected: message too long chars=\(message.count, privacy: .public)")
-            return
-        }
         let urlText = originalURL.absoluteString
         let prompt = AgentDeepLinkPrompt(
             id: UUID().uuidString,
