@@ -279,6 +279,21 @@ assert_plist_string "${entitlements_plist}" "aps-environment" "production" "sign
 assert_plist_string "${entitlements_plist}" "com.apple.developer.devicecheck.appattest-environment" "production" "signed App Attest entitlement mismatch"
 assert_plist_string "${entitlements_plist}" "com.apple.developer.healthkit" "true" "signed HealthKit entitlement mismatch"
 assert_plist_array_contains "${entitlements_plist}" "com.apple.security.application-groups" "${EXPECTED_APP_GROUP}" "signed App Group entitlement mismatch"
+assert_plist_string "${entitlements_plist}" "com.apple.security.hardened-process" "true" "signed Enhanced Security entitlement mismatch"
+
+# The share extension handles untrusted shared content, so it ships hardened too.
+share_extension_path="${app_path}/PlugIns/OpenClawShareExtension.appex"
+share_entitlements_plist="${tmp_dir}/share-entitlements.plist"
+if [[ ! -d "${share_extension_path}" ]]; then
+  echo "Invalid IPA: missing PlugIns/OpenClawShareExtension.appex." >&2
+  exit 1
+fi
+if ! "${CODESIGN_BIN}" -d --entitlements :- "${share_extension_path}" >"${share_entitlements_plist}" 2>"${tmp_dir}/codesign.err"; then
+  detail="$(<"${tmp_dir}/codesign.err")"
+  echo "Invalid IPA: failed to read share extension signed entitlements${detail:+: ${detail}}" >&2
+  exit 1
+fi
+assert_plist_string "${share_entitlements_plist}" "com.apple.security.hardened-process" "true" "share extension signed Enhanced Security entitlement mismatch"
 
 if ! "${SECURITY_BIN}" cms -D -i "${embedded_profile}" >"${profile_plist}" 2>"${tmp_dir}/security.err"; then
   detail="$(<"${tmp_dir}/security.err")"

@@ -228,6 +228,7 @@ async function writeValidFixture(
     atsKey?: "NSAllowsArbitraryLoads" | "NSAllowsArbitraryLoadsInWebContent";
     omitManifest?: "app" | "appex" | "watch";
     invalidManifest?: boolean;
+    omitHardenedProcess?: "app" | "appex";
   } = {},
 ): Promise<{
   ipaPath: string;
@@ -319,6 +320,24 @@ async function writeValidFixture(
         plistArray("com.apple.security.application-groups", [
           "group.ai.openclawfoundation.app.shared",
         ]),
+        ...(options.omitHardenedProcess === "app"
+          ? []
+          : [plistBool("com.apple.security.hardened-process", true)]),
+      ].join(""),
+    ),
+    "utf8",
+  );
+  const shareEntitlementsPath = path.join(fixturesDir, "share-entitlements.plist");
+  writeFileSync(
+    shareEntitlementsPath,
+    plist(
+      [
+        plistArray("com.apple.security.application-groups", [
+          "group.ai.openclawfoundation.app.shared",
+        ]),
+        ...(options.omitHardenedProcess === "appex"
+          ? []
+          : [plistBool("com.apple.security.hardened-process", true)]),
       ].join(""),
     ),
     "utf8",
@@ -356,7 +375,10 @@ async function writeValidFixture(
     codesign,
     `#!/usr/bin/env bash
 set -euo pipefail
-cat "${entitlementsPath}"
+case "\${!#}" in
+  *.appex) cat "${shareEntitlementsPath}" ;;
+  *) cat "${entitlementsPath}" ;;
+esac
 `,
   );
   const security = path.join(binDir, "security");
@@ -569,6 +591,20 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
       expect(result.stderr).toContain(message);
     },
   );
+
+  it.each([
+    ["app", "signed Enhanced Security entitlement mismatch"],
+    ["appex", "share extension signed Enhanced Security entitlement mismatch"],
+  ] as const)("rejects an IPA whose %s is not signed hardened-process", async (target, message) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
+    tempDirs.push(root);
+    const fixture = await writeValidFixture(root, { omitHardenedProcess: target });
+
+    const result = runValidator(fixture);
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain(message);
+  });
 
   it("rejects an IPA with an unparsable privacy manifest", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
