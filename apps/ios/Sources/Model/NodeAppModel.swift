@@ -38,7 +38,7 @@ private struct ApprovalInboxDiscovery: Decodable {
 
 private enum IOSDeepLinkAgentPolicy {
     static let maxMessageChars = 20000
-    static let maxUnkeyedConfirmChars = 240
+    static let maxConfirmChars = 240
 }
 
 private enum TalkCapturePreparationOwner {
@@ -1560,7 +1560,6 @@ final class NodeAppModel {
     }
 
     private static let apnsDeviceTokenUserDefaultsKey = "push.apns.deviceTokenHex"
-    private static let deepLinkKeyUserDefaultsKey = "deeplink.agent.key"
 
     private func refreshBrandingFromGateway(shouldApply: () -> Bool = { true }) async {
         do {
@@ -4448,7 +4447,8 @@ extension NodeAppModel {
                 let epochMs = Int(Date().timeIntervalSince1970 * 1000)
                 let reconnectAuth = self.currentGatewayReconnectAuth(fallback: config)
                 let connectedOptions = options
-                GatewayDiagnostics.log("connect attempt epochMs=\(epochMs) url=\(config.url.absoluteString)")
+                GatewayDiagnostics.log(
+                    "connect attempt epochMs=\(epochMs) endpoint=\(Self.redactedEndpoint(config.url))")
                 do {
                     try await self.nodeGateway.connect(
                         url: config.url,
@@ -9194,46 +9194,35 @@ extension NodeAppModel {
             return
         }
 
-        let allowUnattended = self.isUnattendedDeepLinkAllowed(link.key)
-        if !allowUnattended {
-            if message.count > IOSDeepLinkAgentPolicy.maxUnkeyedConfirmChars {
-                self.recordShareEvent(
-                    "Rejected: deep link over \(IOSDeepLinkAgentPolicy.maxUnkeyedConfirmChars) chars without key.")
-                self.deepLinkLogger.error(
-                    "agent deep link rejected: unkeyed message too long chars=\(message.count, privacy: .public)")
-                return
-            }
-            let urlText = originalURL.absoluteString
-            let prompt = AgentDeepLinkPrompt(
-                id: UUID().uuidString,
-                messagePreview: message,
-                urlPreview: urlText.count > 500 ? "\(urlText.prefix(500))…" : urlText,
-                request: self.effectiveAgentDeepLinkForPrompt(link))
+        if message.count > IOSDeepLinkAgentPolicy.maxConfirmChars {
+            self.recordShareEvent(
+                "Rejected: deep link over \(IOSDeepLinkAgentPolicy.maxConfirmChars) chars.")
+            self.deepLinkLogger.error(
+                "agent deep link rejected: message too long chars=\(message.count, privacy: .public)")
+            return
+        }
+        let urlText = originalURL.absoluteString
+        let prompt = AgentDeepLinkPrompt(
+            id: UUID().uuidString,
+            messagePreview: message,
+            urlPreview: urlText.count > 500 ? "\(urlText.prefix(500))…" : urlText,
+            request: self.effectiveAgentDeepLinkForPrompt(link))
 
-            let promptIntervalSeconds = 5.0
-            let elapsed = Date().timeIntervalSince(self.lastAgentDeepLinkPromptAt)
-            if elapsed < promptIntervalSeconds {
-                if self.pendingAgentDeepLinkPrompt != nil {
-                    self.pendingAgentDeepLinkPrompt = prompt
-                    self.recordShareEvent("Updated local confirmation request (\(message.count) chars).")
-                    self.deepLinkLogger.debug("agent deep link prompt coalesced into active confirmation")
-                    return
-                }
-
-                let remaining = max(0, promptIntervalSeconds - elapsed)
-                self.queueAgentDeepLinkPrompt(prompt, initialDelaySeconds: remaining)
-                self.recordShareEvent("Queued local confirmation (\(message.count) chars).")
-                self.deepLinkLogger.debug("agent deep link prompt queued due to rate limit")
-                return
-            }
-
-            self.presentAgentDeepLinkPrompt(prompt)
-            self.recordShareEvent("Awaiting local confirmation (\(message.count) chars).")
-            self.deepLinkLogger.info("agent deep link requires local confirmation")
+        // A displayed prompt is never replaced: the queue holds the latest link and shows it after
+        // the current prompt is resolved.
+        let promptIntervalSeconds = 5.0
+        let elapsed = Date().timeIntervalSince(self.lastAgentDeepLinkPromptAt)
+        if elapsed < promptIntervalSeconds || self.pendingAgentDeepLinkPrompt != nil {
+            let remaining = max(0, promptIntervalSeconds - elapsed)
+            self.queueAgentDeepLinkPrompt(prompt, initialDelaySeconds: remaining)
+            self.recordShareEvent("Queued local confirmation (\(message.count) chars).")
+            self.deepLinkLogger.debug("agent deep link prompt queued behind active or recent confirmation")
             return
         }
 
-        await self.submitAgentDeepLink(link, messageCharCount: message.count)
+        self.presentAgentDeepLinkPrompt(prompt)
+        self.recordShareEvent("Awaiting local confirmation (\(message.count) chars).")
+        self.deepLinkLogger.info("agent deep link requires local confirmation")
     }
 
     private func sendAgentRequest(link: AgentDeepLink) async throws {
@@ -9345,8 +9334,13 @@ extension NodeAppModel {
         }
     }
 
+    /// Host and port identify the gateway; userinfo, path, and query never reach logs.
+    private static func redactedEndpoint(_ url: URL) -> String {
+        GatewayTLSAuthority(url: url)?.serialized ?? "invalid-endpoint"
+    }
+
     private func effectiveAgentDeepLinkForPrompt(_ link: AgentDeepLink) -> AgentDeepLink {
-        // Without a trusted key, strip delivery/routing knobs to reduce exfiltration risk.
+        // Strip delivery/routing knobs and any caller-supplied key to reduce exfiltration risk.
         AgentDeepLink(
             message: link.message,
             sessionKey: link.sessionKey,
@@ -9355,34 +9349,7 @@ extension NodeAppModel {
             to: nil,
             channel: nil,
             timeoutSeconds: link.timeoutSeconds,
-            key: link.key)
-    }
-
-    private func isUnattendedDeepLinkAllowed(_ key: String?) -> Bool {
-        let normalizedKey = key?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !normalizedKey.isEmpty else { return false }
-        return normalizedKey == Self.expectedDeepLinkKey()
-    }
-
-    static func expectedDeepLinkKey() -> String {
-        let defaults = UserDefaults.standard
-        if let key = defaults.string(forKey: deepLinkKeyUserDefaultsKey), !key.isEmpty {
-            return key
-        }
-        let key = self.generateDeepLinkKey()
-        defaults.set(key, forKey: self.deepLinkKeyUserDefaultsKey)
-        return key
-    }
-
-    private static func generateDeepLinkKey() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        let data = Data(bytes)
-        return data
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
+            key: nil)
     }
 }
 
