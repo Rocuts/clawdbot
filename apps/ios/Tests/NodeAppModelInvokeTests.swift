@@ -4701,6 +4701,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `audio camera clip cannot overlap PTT ownership`() async throws {
+        UserDefaults.standard.set(true, forKey: "camera.enabled")
+        defer { UserDefaults.standard.removeObject(forKey: "camera.enabled") }
         let camera = RecordingCameraService()
         let appModel = NodeAppModel(
             camera: camera,
@@ -4721,6 +4723,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `camera audio ownership blocks PTT and continuous Talk`() async throws {
+        UserDefaults.standard.set(true, forKey: "camera.enabled")
+        defer { UserDefaults.standard.removeObject(forKey: "camera.enabled") }
         let barrier = TalkPreparationBarrier()
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         let voiceNoteCapture = MockVoiceNoteAudioCapture()
@@ -4824,6 +4828,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `background cancels camera audio capture and retains suppression until exit`() async throws {
+        UserDefaults.standard.set(true, forKey: "camera.enabled")
+        defer { UserDefaults.standard.removeObject(forKey: "camera.enabled") }
         let barrier = TalkPreparationBarrier()
         let appModel = NodeAppModel(camera: BlockingAudioCameraService(barrier: barrier))
         defer {
@@ -8204,6 +8210,17 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(res.ok == false)
         #expect(res.error?.code == .unavailable)
         #expect(res.error?.message.contains("CAMERA_DISABLED") == true)
+    }
+
+    @Test @MainActor func `handle invoke rejects camera on a fresh install`() async {
+        await withUserDefaults(["camera.enabled": nil, "gateway.onboardingComplete": nil]) {
+            let appModel = NodeAppModel()
+            let res = await appModel.handleInvoke(
+                BridgeInvokeRequest(id: "cam-fresh", command: OpenClawCameraCommand.snap.rawValue))
+
+            #expect(res.ok == false)
+            #expect(res.error?.message.contains("CAMERA_DISABLED") == true)
+        }
     }
 
     @Test @MainActor func `cancelled camera invoke clears progress HUD`() async {

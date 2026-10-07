@@ -2146,11 +2146,11 @@ final class NodeAppModel {
                 message: "NODE_BACKGROUND_UNAVAILABLE: camera/screen/talk commands require foreground")
         }
 
-        if command.hasPrefix("camera."), !isCameraEnabled() {
+        if command.hasPrefix("camera."), !NodeCapabilityPreferences.isCameraEnabled() {
             return Self.failedInvokeResponse(
                 req,
                 code: .unavailable,
-                message: "CAMERA_DISABLED: enable Camera in iOS Settings → Camera → Allow Camera")
+                message: "CAMERA_DISABLED: enable Camera in the Dashboard under This iPhone (or This iPad)")
         }
 
         do {
@@ -3067,12 +3067,6 @@ extension NodeAppModel {
     fileprivate static func encodePayload(_ obj: some Encodable) throws -> String {
         // JSONEncoder guarantees UTF-8 output.
         try String(bytes: JSONEncoder().encode(obj), encoding: .utf8)!
-    }
-
-    private func isCameraEnabled() -> Bool {
-        // Default-on: if the key doesn't exist yet, treat it as enabled.
-        if UserDefaults.standard.object(forKey: "camera.enabled") == nil { return true }
-        return UserDefaults.standard.bool(forKey: "camera.enabled")
     }
 
     nonisolated static func cameraFacingPreference(rawValue: String?) -> OpenClawCameraFacing {
