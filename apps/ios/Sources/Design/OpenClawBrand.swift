@@ -102,12 +102,6 @@ enum OpenClawBrand {
     static let providerGoogle = Color(red: 66 / 255.0, green: 133 / 255.0, blue: 244 / 255.0)
     static let activationCanvas = Color(uiColor: adaptiveUIColor(light: (255, 255, 255), dark: (18, 14, 15)))
     static let activationSurface = Color(uiColor: adaptiveUIColor(light: (255, 253, 252), dark: (33, 29, 30)))
-    static let activationSecondaryActionTop = Color(uiColor: adaptiveUIColor(
-        light: (255, 255, 255),
-        dark: (36, 32, 33)))
-    static let activationSecondaryActionBottom = Color(uiColor: adaptiveUIColor(
-        light: (248, 248, 250),
-        dark: (30, 27, 28)))
     static let activationInsetSurface = Color(uiColor: adaptiveUIColor(light: (246, 241, 238), dark: (44, 37, 38)))
     static let activationNeutralSurface = Color(uiColor: adaptiveUIColor(light: (242, 242, 247), dark: (34, 34, 37)))
     static let activationNeutralInsetSurface = Color(uiColor: adaptiveUIColor(
@@ -178,16 +172,6 @@ enum OpenClawBrand {
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing)
-    }
-
-    static var activationDisabledGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                activationNeutralInsetSurface,
-                activationNeutralSurface.opacity(0.92),
-            ],
-            startPoint: .top,
-            endPoint: .bottom)
     }
 
     private static func adaptiveUIColor(
