@@ -555,10 +555,10 @@ it proceeds independently of the invoke.
 
 Direct watchOS node commands:
 
-| Surface       | Commands                       | Notes                                                   |
-| ------------- | ------------------------------ | ------------------------------------------------------- |
-| Device        | `device.info`, `device.status` | Watch identity, battery, thermal, storage, and network. |
-| Notifications | `system.notify`                | While the app is active; requires watch permission.     |
+| Surface       | Commands                       | Notes                                               |
+| ------------- | ------------------------------ | --------------------------------------------------- |
+| Device        | `device.info`, `device.status` | Watch identity, battery, thermal, and network.      |
+| Notifications | `system.notify`                | While the app is active; requires watch permission. |
 
 ## Relay-backed push for official builds
 
