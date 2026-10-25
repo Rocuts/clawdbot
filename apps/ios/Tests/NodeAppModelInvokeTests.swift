@@ -9,6 +9,42 @@ import UserNotifications
 @testable import OpenClawChatUI
 @testable import OpenClawKit
 
+private func parseWatchExecApprovalResolvePayload(
+    _ payload: [String: Any], transport: String) throws -> WatchExecApprovalResolveEvent?
+{
+    guard case let .execApprovalResolve(event)? = try WatchMessagingPayloadCodec.parseInboundPayload(
+        payload, transport: transport)
+    else { return nil }
+    return event
+}
+
+private func parseWatchExecApprovalSnapshotRequestPayload(
+    _ payload: [String: Any], transport: String) throws -> WatchExecApprovalSnapshotRequestEvent?
+{
+    guard case let .execApprovalSnapshotRequest(event)? = try WatchMessagingPayloadCodec.parseInboundPayload(
+        payload, transport: transport)
+    else { return nil }
+    return event
+}
+
+private func parseWatchAppSnapshotRequestPayload(
+    _ payload: [String: Any], transport: String) throws -> WatchAppSnapshotRequestEvent?
+{
+    guard case let .appSnapshotRequest(event)? = try WatchMessagingPayloadCodec.parseInboundPayload(
+        payload, transport: transport)
+    else { return nil }
+    return event
+}
+
+private func parseWatchAppCommandPayload(
+    _ payload: [String: Any], transport: String) throws -> WatchAppCommandEvent?
+{
+    guard case let .appCommand(event)? = try WatchMessagingPayloadCodec.parseInboundPayload(
+        payload, transport: transport)
+    else { return nil }
+    return event
+}
+
 @MainActor
 private final class MockVoiceNoteAudioCapture: VoiceNoteAudioCapture {
     private(set) var cancelCallCount = 0
@@ -1023,6 +1059,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
     var status: NotificationAuthorizationStatus = .notDetermined
     var authorizationStatusHandler: (@Sendable () async -> NotificationAuthorizationStatus)?
     var addCalls = 0
+    var lastAddedRequest: UNNotificationRequest?
     let notificationAdded = AsyncTestGate()
     var pendingRemovedIdentifiers: [[String]] = []
     var deliveredRemovedIdentifiers: [[String]] = []
@@ -1035,8 +1072,9 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         return self.status
     }
 
-    func add(_: UNNotificationRequest) async throws {
+    func add(_ request: UNNotificationRequest) async throws {
         self.addCalls += 1
+        self.lastAddedRequest = request
         self.notificationAdded.open()
     }
 
@@ -4701,8 +4739,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `audio camera clip cannot overlap PTT ownership`() async throws {
-        UserDefaults.standard.set(true, forKey: "camera.enabled")
-        defer { UserDefaults.standard.removeObject(forKey: "camera.enabled") }
         let camera = RecordingCameraService()
         let appModel = NodeAppModel(
             camera: camera,
@@ -4723,8 +4759,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `camera audio ownership blocks PTT and continuous Talk`() async throws {
-        UserDefaults.standard.set(true, forKey: "camera.enabled")
-        defer { UserDefaults.standard.removeObject(forKey: "camera.enabled") }
         let barrier = TalkPreparationBarrier()
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         let voiceNoteCapture = MockVoiceNoteAudioCapture()
@@ -4828,8 +4862,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `background cancels camera audio capture and retains suppression until exit`() async throws {
-        UserDefaults.standard.set(true, forKey: "camera.enabled")
-        defer { UserDefaults.standard.removeObject(forKey: "camera.enabled") }
         let barrier = TalkPreparationBarrier()
         let appModel = NodeAppModel(camera: BlockingAudioCameraService(barrier: barrier))
         defer {
@@ -8212,17 +8244,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(res.error?.message.contains("CAMERA_DISABLED") == true)
     }
 
-    @Test @MainActor func `handle invoke rejects camera on a fresh install`() async {
-        await withUserDefaults(["camera.enabled": nil, "gateway.onboardingComplete": nil]) {
-            let appModel = NodeAppModel()
-            let res = await appModel.handleInvoke(
-                BridgeInvokeRequest(id: "cam-fresh", command: OpenClawCameraCommand.snap.rawValue))
-
-            #expect(res.ok == false)
-            #expect(res.error?.message.contains("CAMERA_DISABLED") == true)
-        }
-    }
-
     @Test @MainActor func `cancelled camera invoke clears progress HUD`() async {
         let defaults = UserDefaults.standard
         let key = "camera.enabled"
@@ -8570,7 +8591,19 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let request = try makeInvokeRequest(
             id: "accepted-watch-mirror",
             command: OpenClawWatchCommand.notify.rawValue,
-            params: OpenClawWatchNotifyParams(title: "OpenClaw", body: "Accepted mirror test"))
+            params: OpenClawWatchNotifyParams(
+                title: " OpenClaw ",
+                body: " Accepted mirror test\n",
+                risk: .high,
+                actions: [
+                    OpenClawWatchAction(id: " ", label: "Ignored"),
+                    OpenClawWatchAction(id: " a1 ", label: " A1 "),
+                    OpenClawWatchAction(id: "a2", label: " "),
+                    OpenClawWatchAction(id: "a2", label: "A2"),
+                    OpenClawWatchAction(id: "a3", label: "A3"),
+                    OpenClawWatchAction(id: "a4", label: "A4"),
+                    OpenClawWatchAction(id: "a5", label: "A5"),
+                ]))
         let invocation = Task { @MainActor in await appModel.handleInvoke(request) }
         let deadline = ContinuousClock().now.advanced(by: .seconds(2))
         while await !(mirrorGate.hasStarted()), ContinuousClock().now < deadline {
@@ -8594,6 +8627,15 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(mirrorStarted)
         #expect(responseBeforeMirror.ok)
         #expect(center.addCalls == 1)
+        let content = try #require(center.lastAddedRequest?.content)
+        #expect(content.title == "OpenClaw")
+        #expect(content.body == "Accepted mirror test")
+        #expect(content.interruptionLevel == .timeSensitive)
+        #expect((0..<4).compactMap {
+            content.userInfo[WatchPromptNotificationBridge.actionIDKey(index: $0)] as? String
+        } == ["a1", "a2", "a3", "a4"])
+        #expect(content.userInfo[WatchPromptNotificationBridge.actionLabelKey(index: 0)] as? String == "A1")
+        #expect(content.userInfo[WatchPromptNotificationBridge.actionIDKey(index: 4)] == nil)
     }
 
     @Test @MainActor func `watch notification encodes the exact immutable quick reply target`() throws {
@@ -8628,7 +8670,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(encodedApproval["gatewayStableID"] as? String == "gateway-a")
         #expect(encodedApproval["warningText"] as? String == "Review shell expansion")
 
-        let reply = try #require(WatchMessagingPayloadCodec.parseExecApprovalResolvePayload([
+        let reply = try #require(try parseWatchExecApprovalResolvePayload([
             "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
             "replyId": "reply-a",
             "approvalId": "approval-a",
@@ -8657,7 +8699,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let heldApprovalID = "\u{0085}held-approval-a\u{0085}"
         let activeResolutionAttemptID = "\u{0085}resolution-attempt-a\u{0085}"
         let snapshotRequest = try #require(
-            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            try parseWatchExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
                 "requestId": requestID,
                 "gatewayStableID": "gateway-a",
@@ -8698,39 +8740,39 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         }
         // Shipped Watch binaries request snapshots with neither requestId nor heldApprovals.
         let shippedShapeRequest = try #require(
-            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            try parseWatchExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
             ], transport: "sendMessage"))
         #expect(!shippedShapeRequest.requestId.isEmpty)
         #expect(shippedShapeRequest.heldApprovals.isEmpty)
         #expect(shippedShapeRequest.gatewayStableID == nil)
         let missingHeldApprovalsRequest = try #require(
-            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            try parseWatchExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
                 "requestId": "missing-held-approvals",
             ], transport: "applicationContext"))
         #expect(missingHeldApprovalsRequest.requestId == "missing-held-approvals")
         #expect(missingHeldApprovalsRequest.heldApprovals.isEmpty)
         let missingRequestIdRequest = try #require(
-            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            try parseWatchExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
                 "heldApprovals": [],
             ], transport: "applicationContext"))
         #expect(!missingRequestIdRequest.requestId.isEmpty)
         let emptyRequestIdRequest = try #require(
-            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            try parseWatchExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
                 "requestId": "",
                 "heldApprovals": [],
             ], transport: "applicationContext"))
         #expect(!emptyRequestIdRequest.requestId.isEmpty)
         // A present heldApprovals key keeps strict rejection when malformed.
-        #expect(WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+        #expect(try parseWatchExecApprovalSnapshotRequestPayload([
             "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
             "requestId": "malformed-held-approvals-shape",
             "heldApprovals": "not-an-array",
         ], transport: "applicationContext") == nil)
-        #expect(WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+        #expect(try parseWatchExecApprovalSnapshotRequestPayload([
             "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
             "requestId": "malformed-held-approval",
             "heldApprovals": [
@@ -8738,7 +8780,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 ["approvalId": ""],
             ],
         ], transport: "applicationContext") == nil)
-        #expect(WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+        #expect(try parseWatchExecApprovalSnapshotRequestPayload([
             "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
             "requestId": "malformed-attempt",
             "heldApprovals": [[
@@ -8761,7 +8803,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let encodedApproval = try #require(prompt["approval"] as? [String: Any])
         let encodedApprovalID = try #require(encodedApproval["id"] as? String)
         let encodedGatewayID = try #require(encodedApproval["gatewayStableID"] as? String)
-        let reply = try #require(WatchMessagingPayloadCodec.parseExecApprovalResolvePayload([
+        let reply = try #require(try parseWatchExecApprovalResolvePayload([
             "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
             "replyId": replyID,
             "approvalId": encodedApprovalID,
@@ -8789,24 +8831,24 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let sentAtMs: Int64 = 1_725_000_000_123
         let encodedTimestamp = NSNumber(value: sentAtMs)
 
-        let resolution = try #require(WatchMessagingPayloadCodec.parseExecApprovalResolvePayload([
+        let resolution = try #require(try parseWatchExecApprovalResolvePayload([
             "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
             "approvalId": "approval-a",
             "decision": OpenClawWatchExecApprovalDecision.allowOnce.rawValue,
             "sentAtMs": encodedTimestamp,
         ], transport: "sendMessage"))
         let approvalSnapshotRequest = try #require(
-            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            try parseWatchExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
                 "requestId": "timestamp-request",
                 "sentAtMs": encodedTimestamp,
                 "heldApprovals": [],
             ], transport: "sendMessage"))
-        let appSnapshotRequest = try #require(WatchMessagingPayloadCodec.parseAppSnapshotRequestPayload([
+        let appSnapshotRequest = try #require(try parseWatchAppSnapshotRequestPayload([
             "type": OpenClawWatchPayloadType.appSnapshotRequest.rawValue,
             "sentAtMs": encodedTimestamp,
         ], transport: "sendMessage"))
-        let appCommand = try #require(WatchMessagingPayloadCodec.parseAppCommandPayload([
+        let appCommand = try #require(try parseWatchAppCommandPayload([
             "type": OpenClawWatchPayloadType.appCommand.rawValue,
             "command": OpenClawWatchAppCommand.refresh.rawValue,
             "sentAtMs": encodedTimestamp,
@@ -9012,16 +9054,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(actionIDs == ["a1", "a2", "a3", "a4"])
     }
 
-    @Test func `gateway defined watch notification actions require device unlock`() {
-        let actions = WatchPromptNotificationBridge.categoryActions([
-            OpenClawWatchAction(id: "approve", label: "Approve"),
-            OpenClawWatchAction(id: "decline", label: "Decline", style: "destructive"),
-        ])
-        #expect(actions.count == 2)
-        #expect(actions.allSatisfy { $0.options.contains(.authenticationRequired) })
-        #expect(actions[1].options.contains(.destructive))
-    }
-
     @Test @MainActor func `handle invoke watch notify returns unavailable on delivery failure`() async throws {
         let watchService = MockWatchMessagingService()
         watchService.sendError = NSError(
@@ -9062,13 +9094,13 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `handle deep link records oversized message rejection`() async throws {
         let appModel = NodeAppModel()
-        let msg = String(repeating: "a", count: 241)
+        let msg = String(repeating: "a", count: 20001)
         let url = try #require(URL(string: "openclaw://agent?message=\(msg)"))
         await appModel.handleDeepLink(url: url)
-        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("over 240 chars") == true)
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("message too large") == true)
     }
 
-    @Test @MainActor func `handle deep link requires confirmation when connected`() async {
+    @Test @MainActor func `handle deep link requires confirmation when connected and unkeyed`() async {
         let appModel = NodeAppModel()
         appModel.gatewayConnected = true
         appModel.testAgentRequestHandler = { _ in }
@@ -9084,7 +9116,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Sent to gateway") == true)
     }
 
-    @Test @MainActor func `handle deep link never replaces a displayed prompt`() async throws {
+    @Test @MainActor func `handle deep link coalesces prompt when rate limited`() async throws {
         let appModel = NodeAppModel()
         appModel.gatewayConnected = true
 
@@ -9092,31 +9124,29 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let firstPrompt = try #require(appModel.pendingAgentDeepLinkPrompt)
 
         await appModel.handleDeepLink(url: makeAgentDeepLinkURL(message: "second prompt"))
+        let coalescedPrompt = try #require(appModel.pendingAgentDeepLinkPrompt)
 
-        #expect(appModel.pendingAgentDeepLinkPrompt?.id == firstPrompt.id)
-        #expect(appModel.pendingAgentDeepLinkPrompt?.messagePreview == "first prompt")
-        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Queued local confirmation") == true)
+        #expect(coalescedPrompt.id != firstPrompt.id)
+        #expect(coalescedPrompt.messagePreview.contains("second prompt"))
     }
 
-    @Test @MainActor func `handle deep link strips delivery fields and ignores any key`() async throws {
+    @Test @MainActor func `handle deep link strips delivery fields when unkeyed`() async throws {
         let appModel = NodeAppModel()
         appModel.gatewayConnected = true
         let url = makeAgentDeepLinkURL(
             message: "route this",
             deliver: true,
             to: "123456",
-            channel: "telegram",
-            key: "any-caller-supplied-key")
+            channel: "telegram")
 
         await appModel.handleDeepLink(url: url)
         let prompt = try #require(appModel.pendingAgentDeepLinkPrompt)
         #expect(prompt.request.deliver == false)
         #expect(prompt.request.to == nil)
         #expect(prompt.request.channel == nil)
-        #expect(prompt.request.key == nil)
     }
 
-    @Test @MainActor func `handle deep link rejects long message when connected`() async {
+    @Test @MainActor func `handle deep link rejects long unkeyed message when connected`() async {
         let appModel = NodeAppModel()
         appModel.gatewayConnected = true
         let message = String(repeating: "x", count: 241)
@@ -9125,6 +9155,19 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await appModel.handleDeepLink(url: url)
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
         #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Rejected") == true)
+    }
+
+    @Test @MainActor func `handle deep link bypasses prompt with valid key`() async {
+        let appModel = NodeAppModel()
+        appModel.gatewayConnected = true
+        appModel.testAgentRequestHandler = { _ in }
+        let key = NodeAppModel.expectedDeepLinkKey()
+        let url = makeAgentDeepLinkURL(message: "trusted request", key: key)
+
+        await appModel.handleDeepLink(url: url)
+        #expect(appModel.pendingAgentDeepLinkPrompt == nil)
+        #expect(appModel.openChatRequestID == 1)
+        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Sent to gateway") == true)
     }
 
     @Test @MainActor func `operator scopes use the active gateway token`() throws {

@@ -248,12 +248,8 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
     params.requestParams,
   );
   // Restart delivery uses generic :thread: parsing plus plugin-owned session grammars.
-  const sessionDelivery = extractDeliveryInfo(sessionKey);
-  const restartRequirement = resolveConfigRestartRequirement({
-    changedPaths: params.changedPaths,
-    previousConfig: params.previousConfig,
-    nextConfig: params.nextConfig,
-  });
+  const sessionDelivery = await extractDeliveryInfo(sessionKey);
+  const restartRequirement = resolveConfigRestartRequirement(params);
   const payload: RestartSentinelPayload = {
     kind: params.kind,
     status: "ok",

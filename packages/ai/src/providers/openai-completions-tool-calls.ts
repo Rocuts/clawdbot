@@ -15,11 +15,6 @@ type NormalizedOpenAICompletionsDelta = {
   toolCalls: ChatCompletionToolCallDelta[];
 };
 
-type OpenAICompletionsToolCallFinalizationOptions = {
-  allowSilentToolCallPromotion?: boolean;
-  onConfirmedToolCall?: (block: ToolCall, contentIndex: number) => void;
-};
-
 /** Keep encrypted provider reasoning attached to the first matching tool call. */
 export function createOpenAIEncryptedToolCallReasoningTracker() {
   const firstBlocks = new Map<string, { block: ToolCall; signature?: string }>();
@@ -235,7 +230,10 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
 /** Publish only executable calls; streaming scratch state never belongs in replay. */
 export function finalizeOpenAICompletionsToolCalls(
   output: Pick<AssistantMessage, "content" | "stopReason" | "errorMessage">,
-  options: OpenAICompletionsToolCallFinalizationOptions = {},
+  options: {
+    allowSilentToolCallPromotion?: boolean;
+    onConfirmedToolCall?: (block: ToolCall, contentIndex: number) => void;
+  } = {},
 ): void {
   const isToolCall = (block: AssistantMessage["content"][number]): block is ToolCall =>
     block.type === "toolCall";
@@ -261,10 +259,7 @@ export function finalizeOpenAICompletionsToolCalls(
     return;
   }
 
-  type FinalToolCall = ToolCall & {
-    partialArgs?: unknown;
-  };
-  const toolCalls = output.content.filter(isToolCall) as FinalToolCall[];
+  const toolCalls = output.content.filter(isToolCall);
   const rejectToolCalls = () => {
     output.stopReason = "error";
     output.errorMessage = "Provider returned an incomplete or malformed tool call";
@@ -275,15 +270,15 @@ export function finalizeOpenAICompletionsToolCalls(
       (call) =>
         typeof call.name !== "string" ||
         call.name.trim().length === 0 ||
-        typeof call.partialArgs !== "string" ||
-        call.partialArgs.trim().length === 0,
+        typeof call.partialJson !== "string" ||
+        call.partialJson.trim().length === 0,
     )
   ) {
     rejectToolCalls();
     return;
   }
   try {
-    finalizeTerminalToolCallArguments(toolCalls, (call) => call.partialArgs);
+    finalizeTerminalToolCallArguments(toolCalls, (call) => call.partialJson);
   } catch {
     rejectToolCalls();
     return;
@@ -294,8 +289,7 @@ export function finalizeOpenAICompletionsToolCalls(
     if (!block || !isToolCall(block)) {
       continue;
     }
-    delete (block as { partialArgs?: string }).partialArgs;
-    delete (block as { streamIndex?: number }).streamIndex;
+    delete block.partialJson;
     options.onConfirmedToolCall?.(block, contentIndex);
   }
 }

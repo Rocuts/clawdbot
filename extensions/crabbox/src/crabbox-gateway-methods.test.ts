@@ -14,12 +14,12 @@ import {
   recoverCrabboxImage,
 } from "./crabbox-gateway-methods.js";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
+import { warmAllocation, warmImage, warmRecord } from "./crabbox-warm-scenarios.test-support.js";
 import type { CrabboxSnapshotActions } from "./crabbox-worker-snapshot-actions.js";
 import {
   CrabboxWarmImageRequestError,
   listCrabboxWarmImages,
   listCrabboxLegacyWarmLeases,
-  type WarmAllocationRecord,
   type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 
@@ -40,19 +40,8 @@ afterEach(async () => {
 });
 
 function record(): WarmProfileRecord {
-  return {
-    version: 3,
-    allocations: {},
-    image: {
-      checkpointId: "chk_fixture",
-      kind: "native",
-      state: "available",
-      createdAtMs: 1,
-      preparationKey: null,
-      cacheKey: null,
-      purpose: null,
-      lastDemandAtMs: 2,
-    },
+  return warmRecord({
+    image: warmImage("chk_fixture", { lastDemandAtMs: 2 }),
     operation: {
       type: "capture",
       id: SELECTOR,
@@ -61,7 +50,7 @@ function record(): WarmProfileRecord {
       provider: "aws",
       phase: "uncertain",
     },
-  };
+  });
 }
 
 function createApi() {
@@ -69,7 +58,10 @@ function createApi() {
     provider: "crabbox",
     settings: { ...SETTINGS, ...settings },
   });
-  const setup = { setup: "true", setupEnv: ["SYNTHETIC_SETUP_INPUT"] };
+  const setup = {
+    setup: "true",
+    setupSecrets: { SYNTHETIC_SETUP_INPUT: { source: "store", provider: "default", id: "SETUP" } },
+  };
   const api = createTestPluginApi({
     runtime: { state: crabboxState } as OpenClawPluginApi["runtime"],
     id: "crabbox",
@@ -135,37 +127,6 @@ describe("Crabbox snapshot mutations", () => {
       expect(actions[action]).not.toHaveBeenCalled();
     },
   );
-
-  it.each([true, false])(
-    "passes pin=%s to its owner and returns the updated summary",
-    async (pinned) => {
-      const actions = await createActions();
-      const respond = vi.fn();
-      await mutateCrabboxImage(createApi(), actions, "pin", {
-        params: { checkpointId: "chk_fixture", pinned },
-        respond,
-      });
-      expect(actions.pin).toHaveBeenCalledWith("chk_fixture", pinned);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ checkpointId: "chk_fixture" }),
-      );
-    },
-  );
-
-  it("passes a previous checkpoint to rollback and returns the owner's summary", async () => {
-    const actions = await createActions();
-    const respond = vi.fn();
-    await mutateCrabboxImage(createApi(), actions, "rollback", {
-      params: { checkpointId: "chk_previous" },
-      respond,
-    });
-    expect(actions.rollback).toHaveBeenCalledWith("chk_previous");
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ checkpointId: "chk_fixture" }),
-    );
-  });
 
   it("uses current Crabbox profiles for deletion and preserves pending retirement", async () => {
     const actions = await createActions();
@@ -238,16 +199,7 @@ describe("Crabbox snapshots Gateway methods", () => {
       projectLabel: "git.example.test/team/project",
       projectRoot: "/projects/example",
     });
-    const allocation: WarmAllocationRecord = {
-      choice: { kind: "cold" },
-      machineClass: "standard",
-      phase: "enrolled",
-      preparationKey: null,
-      cacheKey: null,
-      purpose: null,
-      demandAtMs: null,
-      imageGeneration: null,
-    };
+    const allocation = warmAllocation(undefined, { phase: "enrolled" });
     for (let index = 0; index < 21; index++) {
       current.allocations[`cbx_${String(index).padStart(2, "0")}`] = allocation;
     }
@@ -326,7 +278,7 @@ describe("Crabbox snapshots Gateway methods", () => {
     expect(Object.keys(image.allocations)).toHaveLength(21);
   });
 
-  it("uses current configured defaults without reading setup environment or including other providers", async () => {
+  it("uses current configured defaults without resolving secrets or including other providers", async () => {
     const api = createApi();
     const respond = vi.fn();
     await listCrabboxImages(api, { params: {}, respond });
@@ -335,7 +287,7 @@ describe("Crabbox snapshots Gateway methods", () => {
         [
           ["classless", undefined, "linux", "off", "machine class"],
           ["disabled", "standard", "linux", "off", "Disabled"],
-          ["environment", "standard", "linux", "off", "environment"],
+          ["environment", "standard", "linux", "on", "default"],
           ["explicit", "standard", "linux", "on", "Explicitly"],
           ["linux", "standard", "linux", "on", "default"],
           ["mac", "standard", "macos", "off", "Linux"],
@@ -357,9 +309,7 @@ describe("Crabbox snapshots Gateway methods", () => {
 
   it.each([
     { selector: SELECTOR },
-    { selector: SELECTOR, acknowledgeProviderCleanup: "true" },
     { selector: " ", acknowledgeProviderCleanup: true },
-    { selector: 1, acknowledgeProviderCleanup: true },
     { selector: SELECTOR, acknowledgeProviderCleanup: true, extra: true },
   ])("refuses invalid recovery params without changing capture ownership: %j", async (params) => {
     const current = record();

@@ -93,7 +93,8 @@ struct ControlUIHubScreen: View {
                     tls: config?.tls,
                     nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
                         config: config,
-                        storedOperatorToken: storedOperatorToken))
+                        storedOperatorToken: storedOperatorToken,
+                        appModel: self.appModel))
                     // Unrelated SwiftUI updates must not reload a live desktop or shell.
                         .id(self.page.webContentIdentity(config: config, storedOperatorToken: storedOperatorToken))
                         .ignoresSafeArea(.container, edges: .bottom)
@@ -136,8 +137,7 @@ struct ControlUIHubScreen: View {
                     Text("Open Gateway Settings")
                         .font(OpenClawType.subheadSemiBold)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(OpenClawBrand.accent)
+                .openClawProminentButton()
             }
         }
         .padding(24)

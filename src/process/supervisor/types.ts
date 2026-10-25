@@ -7,6 +7,7 @@ export type TerminationReason =
   | "manual-cancel"
   | "overall-timeout"
   | "no-output-timeout"
+  | "memory-limit"
   | "spawn-error"
   | "signal"
   | "exit";
@@ -86,6 +87,8 @@ export type ProcessCleanupResult = {
 
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
+  /** Retained tree root, including descendants adopted after the command exits. */
+  memoryRootPid?: number;
   stdin?: ManagedRunStdin;
   oomScoreWrapperSelected?: boolean;
   /** Both output subscriptions observe bytes separately from decoded text. */
@@ -115,6 +118,8 @@ type SpawnBaseInput = {
   cleanupOwnership?: "external";
   /** Revalidate the caller at deferred spawn and private-input delivery boundaries. */
   assertCurrent?: () => void;
+  /** Prepare async launch authority after queued scope admission and before replacing a live run. */
+  prepareSpawn?: () => void | Promise<void>;
   /** Revalidate launch policy at admission and immediately before each native launch attempt. */
   beforeSpawn?: () => void;
   runId?: string;
@@ -124,6 +129,8 @@ type SpawnBaseInput = {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
+  /** Internal host-exec policy; sandbox transports keep their backend's limits. */
+  memoryLimitBytes?: number;
   /**
    * When false, stdout/stderr are streamed via callbacks only and not retained in RunExit payload.
    */
@@ -150,6 +157,8 @@ type SpawnChildInput = SpawnBaseInput & {
   exactEnv?: true;
   windowsVerbatimArguments?: boolean;
   input?: string;
+  /** Prepare input authority at the adapter's stdin delivery boundary. */
+  prepareInput?: () => void | Promise<void>;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
   onStdoutRaw?: (chunk: Buffer) => void;

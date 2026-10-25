@@ -33,7 +33,8 @@ struct SessionDashboardScreen: View {
                     },
                     nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
                         config: config,
-                        storedOperatorToken: storedOperatorToken))
+                        storedOperatorToken: storedOperatorToken,
+                        appModel: self.appModel))
                     .id(AuthenticatedControlUI.webContentIdentity(
                         config: config,
                         storedOperatorToken: storedOperatorToken))

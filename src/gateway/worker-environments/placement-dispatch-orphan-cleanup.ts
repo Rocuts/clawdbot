@@ -3,6 +3,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
+import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import type {
   PlacementRecoveryDeps,
   WorkerPlacementRecoveryAdmission,
@@ -14,6 +15,8 @@ import {
 
 /** One startup pass of orphan-ref cleanup: workspace roots resolved once, completed roots remembered. */
 export type PendingWorkspaceResultOrphanCleanup = {
+  placements: WorkerSessionPlacementIdentity[];
+  initialDiscoveryPending: boolean;
   /** sessionId → workspace root, or null when the placement has no local root to clean. */
   rootsBySession: Map<string, string | null>;
   completedRoots: Set<string>;
@@ -24,34 +27,40 @@ export async function cleanupPendingWorkspaceResultOrphans(
   admit: WorkerPlacementRecoveryAdmission,
   pass: PendingWorkspaceResultOrphanCleanup,
 ): Promise<boolean> {
-  if (getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0) {
+  if (deps.isShuttingDown?.() || getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0) {
     return false;
   }
   const { placements } = deps;
   const { completedRoots, rootsBySession } = pass;
-  // Each sweep admits the current placements, but a placement's workspace root is resolved
-  // once per pass; a failed resolution stays uncached and is retried on the next sweep.
-  const workspaceSessions = new Map<string, string[]>();
-  for (const placement of await placements.readChangeSnapshot()) {
-    let root = rootsBySession.get(placement.sessionId);
-    if (root === undefined) {
-      try {
-        const workspace = await deps.resolveWorkspace(placement);
-        root = workspace.kind === "repository" ? null : workspace.path;
-        rootsBySession.set(placement.sessionId, root);
-      } catch {
-        // Cleanup refs are independently retryable on the next sweep or after the next restart.
-        continue;
-      }
+  // Discover the startup set once, then rotate failed lookups instead of rescanning
+  // every unavailable workspace each minute. Snapshot the budget before requeueing.
+  const attempts = pass.initialDiscoveryPending
+    ? pass.placements.length
+    : Math.min(pass.placements.length, 8);
+  for (let index = 0; index < attempts; index++) {
+    if (deps.isShuttingDown?.()) {
+      return false;
     }
+    const placement = pass.placements.shift()!;
+    try {
+      const workspace = await deps.resolveWorkspace(placement);
+      rootsBySession.set(placement.sessionId, workspace.kind === "local" ? workspace.path : null);
+    } catch {
+      pass.placements.push(placement);
+    }
+  }
+  pass.initialDiscoveryPending = false;
+  let complete = pass.placements.length === 0;
+  const workspaceSessions = new Map<string, string[]>();
+  // Admission includes previously resolved siblings, even if only one root was found this sweep.
+  for (const [sessionId, root] of rootsBySession) {
     if (root === null) {
       continue;
     }
     const sessionIds = workspaceSessions.get(root) ?? [];
-    sessionIds.push(placement.sessionId);
+    sessionIds.push(sessionId);
     workspaceSessions.set(root, sessionIds);
   }
-  let complete = true;
   // The existing minute sweep owns continuation; orphan refs carry no live authority.
   // Keep serial session admission and bound cold-start work independently of history size.
   let remaining = 8;
@@ -59,7 +68,11 @@ export async function cleanupPendingWorkspaceResultOrphans(
     if (completedRoots.has(root)) {
       continue;
     }
-    if (remaining === 0 || getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0) {
+    if (
+      deps.isShuttingDown?.() ||
+      remaining === 0 ||
+      getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0
+    ) {
       return false;
     }
     const idleAdmission = tryBeginGatewayRootWorkAdmission("idle-task");
@@ -70,7 +83,10 @@ export async function cleanupPendingWorkspaceResultOrphans(
       let deferred = false;
       const admitted = await idleAdmission.run(() =>
         admit(sessionIds, async () => {
-          if (getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0) {
+          if (
+            deps.isShuttingDown?.() ||
+            getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0
+          ) {
             deferred = true;
             return;
           }

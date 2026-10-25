@@ -15,10 +15,11 @@ import type {
 import type { UserProfileAuthLink } from "../../state/user-model-accounts.js";
 import { createModelAccountConnectService } from "../model-account-connect.js";
 import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 import { usersHandlers } from "./users.js";
 
-const resolveUserProfileId = vi.hoisted(() => vi.fn());
+const resolveProfileId = vi.hoisted(() => vi.fn());
 const prepareUserProfileSelectionAuthority = vi.hoisted(() => vi.fn());
 const connectUserModelAccount = vi.hoisted(() => vi.fn());
 const listUserProfileAuthLinks = vi.hoisted(() => vi.fn());
@@ -34,16 +35,31 @@ const resolvePersonalAccountAuthMethod = vi.hoisted(() => vi.fn());
 const exchange = vi.hoisted(() => vi.fn());
 const modelAccountLinksCurrent = vi.hoisted(() => vi.fn());
 
-vi.mock("../../state/user-profiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../state/user-profiles.js")>();
-  return {
-    ...actual,
-    getUserProfileRole: () => null,
-  };
-});
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  readResidentUserProfileIdentity: (reference: string) => {
+    const profileId = resolveProfileId(reference);
+    return profileId
+      ? { profileId, aliases: new Set([reference, profileId]), role: null }
+      : undefined;
+  },
+  captureResidentUserProfileAccess: (profileId: string) => ({
+    assertCurrent: () => ({ id: resolveProfileId(profileId), role: null, githubLogin: null }),
+  }),
+}));
 vi.mock("../../state/user-channel-identity-operations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-channel-identity-operations.js")>()),
   prepareUserProfileSelectionAuthority,
+  prepareUserProfileRolePolicyAuthority: async (reference: string) => {
+    const profileId = resolveProfileId(reference);
+    return {
+      profileId,
+      role: null,
+      githubLogin: null,
+      isCurrent: () =>
+        resolveProfileId(reference) === profileId && resolveProfileId(profileId) === profileId,
+    };
+  },
 }));
 vi.mock("../../state/user-profile-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-events.js")>()),
@@ -74,6 +90,8 @@ vi.mock("../../agents/auth-profiles/shared-main-dir.js", async (importOriginal) 
 vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
   ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: async (...args: unknown[]) =>
+    ensureAuthProfileStoreWithoutExternalProfiles(...args),
 }));
 vi.mock("../../logging/secret-redaction-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../logging/secret-redaction-registry.js")>()),
@@ -135,14 +153,8 @@ function createClient(profileId = "profile-1", scopes = ["operator.write"]): Tes
   const client: TestClient = {
     connId: `connection-${clients.size + 1}`,
     invalidated: false,
-    authenticatedUserProfile: { profileId, displayName: "Ada", hasAvatar: false, updatedAt: 1 },
-    connect: {
-      role: "operator",
-      scopes,
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", mode: "test", version: "1", platform: "test" },
-    },
+    authenticatedUserProfile: gatewayProfile(profileId, "Ada"),
+    connect: gatewayConnect(scopes, { id: "test", mode: "test", version: "1" }),
   };
   clients.add(client);
   return client;
@@ -276,14 +288,13 @@ export function setupModelAccountConnectTest() {
           return links;
         },
       );
-    resolveUserProfileId.mockImplementation((id: string) => id);
+    resolveProfileId.mockImplementation((id: string) => id);
     prepareUserProfileSelectionAuthority.mockImplementation(async (reference: string) => {
-      const profileId = resolveUserProfileId(reference);
+      const profileId = resolveProfileId(reference);
       return {
         profileId,
         isCurrent: () =>
-          resolveUserProfileId(reference) === profileId &&
-          resolveUserProfileId(profileId) === profileId,
+          resolveProfileId(reference) === profileId && resolveProfileId(profileId) === profileId,
       };
     });
     listPersonalAccountAuthChoices.mockReturnValue([
@@ -349,7 +360,7 @@ function restartService() {
 }
 
 export {
-  resolveUserProfileId,
+  resolveProfileId,
   prepareUserProfileSelectionAuthority,
   connectUserModelAccount,
   listUserProfileAuthLinks,

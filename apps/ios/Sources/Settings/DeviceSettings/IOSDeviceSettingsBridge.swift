@@ -265,7 +265,8 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
         switch request {
         case .status:
             self.refreshLocationAvailability()
-        case .checkForUpdates, .chromeExtensionSetup, .chromeExtensionStatus, .installChromeExtension:
+        case .checkForUpdates, .chromeExtensionSetup, .chromeExtensionStatus, .installChromeExtension,
+             .resolvePermission:
             break
         case let .set(key, value):
             return try await self.set(key, value: value, sourceID: sourceID)
@@ -321,7 +322,7 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
             _ = await IOSDeviceSettingsActions.setNotificationsEnabled(
                 enabled, confirmDisclosure: { await self.confirm(.notificationEnrollment) }, isCurrent: isCurrent)
         case let (.cameraEnabled, .boolean(enabled)):
-            NodeCapabilityPreferences.setCameraEnabled(enabled)
+            UserDefaults.standard.set(enabled, forKey: "camera.enabled")
             return true
         case let (.keepAwakeEnabled, .boolean(enabled)):
             UserDefaults.standard.set(enabled, forKey: "screen.preventSleep")

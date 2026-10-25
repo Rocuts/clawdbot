@@ -135,10 +135,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     #if DEBUG
-    func _test_resolvedAppModel() -> NodeAppModel? {
-        self.resolvedAppModel()
-    }
-
     func _test_wakeRefreshTaskIdentifier() -> String {
         Self.wakeRefreshTaskIdentifier
     }
@@ -212,7 +208,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void)
     {
-        self.logger.info("APNs remote notification received keys=\(userInfo.keys.count, privacy: .public)")
         Task { @MainActor in
             if let push = ApprovalNotificationBridge.parseResolvedPush(userInfo: userInfo) {
                 if let appModel = self.resolvedAppModel() {
@@ -233,7 +228,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 return
             }
             let result = await appModel.handleSilentPushWake(userInfo)
-            self.logger.info("APNs wake handled=\(result.handled, privacy: .public)")
             if !result.handled {
                 self.scheduleBackgroundWakeRefresh(afterSeconds: 90, reason: "silent_push_not_applied")
             }
@@ -242,7 +236,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     func scenePhaseChanged(_ phase: ScenePhase) {
-        GatewayDiagnostics.log("app delegate: scene phase changed=\(String(describing: phase))")
         if phase == .background {
             self.scheduleBackgroundWakeRefresh(afterSeconds: 120, reason: "scene_background")
         }
@@ -469,20 +462,12 @@ enum WatchPromptNotificationBridge {
     {
         guard sendResult.queuedForDelivery || !sendResult.deliveredImmediately else { return }
 
-        let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty || !body.isEmpty else { return }
         guard await self.isNotificationAuthorizationAllowed(notificationCenter: notificationCenter),
               !Task.isCancelled
         else { return }
 
-        let normalizedActions = (params.actions ?? []).compactMap { action -> OpenClawWatchAction? in
-            let id = action.id.trimmingCharacters(in: .whitespacesAndNewlines)
-            let label = action.label.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !id.isEmpty, !label.isEmpty else { return nil }
-            return OpenClawWatchAction(id: id, label: label, style: action.style)
-        }
-        let displayedActions = Array(normalizedActions.prefix(4))
+        // The node invoke boundary normalizes display fields and caps actions before delivery.
+        let displayedActions = params.actions ?? []
 
         var categoryIdentifier = ""
         if !displayedActions.isEmpty {
@@ -523,21 +508,14 @@ enum WatchPromptNotificationBridge {
         }
 
         let content = UNMutableNotificationContent()
-        content.title = title.isEmpty ? "OpenClaw" : title
-        content.body = body
+        content.title = params.title.isEmpty ? "OpenClaw" : params.title
+        content.body = params.body
         content.sound = .default
         content.userInfo = userInfo
         if !categoryIdentifier.isEmpty {
             content.categoryIdentifier = categoryIdentifier
         }
-        switch params.priority ?? .active {
-        case .passive:
-            content.interruptionLevel = .passive
-        case .timeSensitive:
-            content.interruptionLevel = .timeSensitive
-        case .active:
-            content.interruptionLevel = .active
-        }
+        content.interruptionLevel = (params.priority ?? .active).interruptionLevel
 
         let request = UNNotificationRequest(
             identifier: "watch.prompt.\(invokeID)",
@@ -577,7 +555,7 @@ enum WatchPromptNotificationBridge {
         "\(self.actionLabelKeyPrefix)\(index)"
     }
 
-    static func categoryActions(_ actions: [OpenClawWatchAction]) -> [UNNotificationAction] {
+    private static func categoryActions(_ actions: [OpenClawWatchAction]) -> [UNNotificationAction] {
         actions.enumerated().map { index, action in
             let identifier: String = switch index {
             case 0:
@@ -596,8 +574,8 @@ enum WatchPromptNotificationBridge {
 
     private static func notificationActionOptions(style: String?) -> UNNotificationActionOptions {
         style?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "destructive"
-            ? [.destructive, .authenticationRequired]
-            : [.authenticationRequired]
+            ? [.destructive]
+            : []
     }
 
     private static func isNotificationAuthorizationAllowed(
@@ -636,8 +614,6 @@ struct OpenClawApp: App {
         GatewaySettingsStore.bootstrapPersistence()
         (UserDefaults(suiteName: OpenClawAppGroup.identifier) ?? .standard)
             .removeObject(forKey: "share.defaultInstruction")
-        // Deletes a retired secret (the unattended deep-link key); removable after the 2026.12 train.
-        UserDefaults.standard.removeObject(forKey: "deeplink.agent.key")
         OpenClawType.installUIKitAppearance()
         let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
         #if DEBUG

@@ -1,9 +1,9 @@
 name: OpenClaw
 options:
-  preGenCommand: node ../../scripts/prepare-apple-mermaid.mjs
+  preGenCommand: bash ../../scripts/ios-generate-test-tls-identity.sh && node ../../scripts/prepare-apple-mermaid.mjs
   bundleIdPrefix: ai.openclawfoundation
   deploymentTarget:
-    iOS: "18.0"
+    iOS: "26.2"
   xcodeVersion: "26.0"
 
 settings:
@@ -18,7 +18,7 @@ packages:
     path: ../swabble
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
-    exactVersion: 153.0.0
+    exactVersion: 154.0.0
   Sodium:
     url: https://github.com/jedisct1/swift-sodium.git
     revision: cfd195c76882aa9b997560ca7cb95d72fbf5db00
@@ -71,8 +71,6 @@ targets:
         type: folder
         buildPhase: resources
       - path: Sources/Fonts
-        buildPhase: resources
-      - path: Sources/PrivacyInfo.xcprivacy
         buildPhase: resources
       - path: Resources/Localizable.xcstrings
         buildPhase: resources
@@ -177,6 +175,7 @@ targets:
           - "$(PRODUCT_BUNDLE_IDENTIFIER).bgrefresh"
         NSLocalNetworkUsageDescription: OpenClaw discovers and connects to your OpenClaw gateway on the local network.
         NSAppTransportSecurity:
+          NSAllowsArbitraryLoadsInWebContent: true
           NSAllowsLocalNetworking: true
         NSBonjourServices:
           - _openclaw-gw._tcp
@@ -219,8 +218,6 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: ShareExtension
-      - path: ShareExtension/PrivacyInfo.xcprivacy
-        buildPhase: resources
       - path: Resources/Localizable.xcstrings
         buildPhase: resources
     dependencies:
@@ -273,8 +270,6 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: ActivityWidget
-      - path: ActivityWidget/PrivacyInfo.xcprivacy
-        buildPhase: resources
       - path: Sources/LiveActivity/OpenClawActivityAttributes.swift
       # Shared continuous avatar waveform; dependency-free for widget isolation.
       - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/TalkWaveformView.swift
@@ -327,8 +322,6 @@ targets:
       - path: WatchApp
         excludes:
           - Info.plist
-      - path: WatchApp/PrivacyInfo.xcprivacy
-        buildPhase: resources
       - path: Sources/Services/WatchSessionActivationGate.swift
         group: Sources/Services
       - path: Sources/Services/ExactOpaqueIdentifier.swift
@@ -433,11 +426,15 @@ targets:
       - path: Tests
         excludes:
           - Logic
-      - path: ../macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift
-        group: Tests
       - path: ../macos/Tests/OpenClawIPCTests/AsyncTestGate.swift
         group: Tests
+      - path: ../macos/Tests/OpenClawIPCTests/DashboardHTTPFixture.swift
+        group: Tests
       - path: ../macos/Tests/OpenClawIPCTests/TestWait.swift
+        group: Tests
+      - path: build/TestTLS/GatewayIngressIdentity.p12
+        buildPhase: resources
+      - path: ../macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift
         group: Tests
       - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/NativeGatewayWebSocketFixture.swift
         group: Tests

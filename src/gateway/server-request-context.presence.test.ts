@@ -3,14 +3,16 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { listSystemPresence } from "../infra/system-presence.js";
-import { linkEmail } from "../state/user-profile-writes.worker.js";
 import {
-  ensureProfileForEmail,
   getUserProfileDisplay,
-  resolveUserProfileId,
-} from "../state/user-profiles.js";
+  prepareUserProfileCatalog,
+  readResidentUserProfileId,
+} from "../state/user-profile-list.js";
+import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -20,6 +22,7 @@ import { initializeSessionReadContext } from "./server-methods/sessions-read-cac
 import { sessionSuggestionHandlers } from "./server-methods/sessions-suggestions.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams, makeGatewayClient } from "./server-request-context.test-support.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { getHealthVersion, incrementPresenceVersion } from "./server/health-state.js";
 import { createPresencePublisher } from "./server/presence-events.js";
@@ -172,10 +175,11 @@ describe("createGatewayRequestContext presence", () => {
   );
 
   it("canonicalizes a connected profile after its durable identity is merged", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const source = ensureProfileForEmail("merge-source@example.test");
       const target = ensureProfileForEmail("merge-target@example.test");
       const unrelatedProfile = ensureProfileForEmail("merge-unrelated@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const sourceClient = {
         ...makeProfileClient("merge-source", "merge-source@example.test", {
           profileId: source.id,
@@ -210,8 +214,11 @@ describe("createGatewayRequestContext presence", () => {
       });
       const context = createGatewayRequestContext(params);
 
-      const linked = linkEmail("merge-source@example.test", target.id);
-      expect(resolveUserProfileId(source.id)).toBe(target.id);
+      const { profile: linked } = await linkCanonicalUserProfileEmail(
+        "merge-source@example.test",
+        target.id,
+      );
+      expect(readResidentUserProfileId(source.id)).toBe(target.id);
       const display = getUserProfileDisplay(linked.id);
       context.refreshConnectedUserProfile?.({
         ...display,
@@ -254,7 +261,8 @@ describe("createGatewayRequestContext presence", () => {
   });
 
   it("coalesces typing activity across a person's tabs and publishes explicit changes after the coalescing window", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const started = 1_800_000_000_000;
       const clock = vi.spyOn(Date, "now").mockReturnValue(started);
       const increment = vi.mocked(incrementPresenceVersion);
@@ -294,13 +302,10 @@ describe("createGatewayRequestContext presence", () => {
             usesSharedGatewayAuth: false,
             presenceKey: `typing-presence-${tab}`,
             authenticatedUserId: "typing-presence@example.test",
-            authenticatedUserProfile: {
-              profileId: profile.id,
+            authenticatedUserProfile: dispatchProfile(profile.id, {
               displayName: "Typing Person",
-              avatarRevision: "1",
-              hasAvatar: false,
               updatedAt: started,
-            },
+            }),
             personPresence: { onlineSince: started - 2_000 + index * 1_000 },
           },
         ),
